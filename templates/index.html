@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Policy Guardian AI</title>
+
+<style>
+body {
+    margin: 0;
+    font-family: Arial;
+    background: #050b14;
+    color: #00eaff;
+}
+
+.container {
+    max-width: 800px;
+    margin: 80px auto;
+    padding: 40px;
+    background: #0a1627;
+    border-radius: 12px;
+    box-shadow: 0 0 25px #00eaff44;
+}
+
+h1 {
+    text-align: center;
+    margin-bottom: 30px;
+    letter-spacing: 2px;
+}
+
+textarea {
+    width: 100%;
+    height: 160px;
+    background: #050b14;
+    border: 1px solid #00eaff;
+    color: white;
+    padding: 15px;
+    font-size: 16px;
+    border-radius: 8px;
+}
+
+button {
+    margin-top: 20px;
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(90deg,#00eaff,#0066ff);
+    border: none;
+    color: black;
+    font-size: 18px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+button:hover {
+    opacity: 0.85;
+}
+
+.result {
+    margin-top: 25px;
+    text-align: center;
+    font-size: 22px;
+}
+
+.footer {
+    text-align:center;
+    margin-top:30px;
+    opacity:.6;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+<h1>⚡ Policy Guardian AI</h1>
+
+<textarea id="text" placeholder="Paste policy or contract text here..."></textarea>
+
+<button onclick="predict()">Analyze</button>
+
+<div class="result" id="result"></div>
+
+<div class="footer">
+Powered by DistilBERT + Flask
+</div>
+</div>
+
+<script>
+function predict(){
+
+    let text = document.getElementById("text").value;
+
+    if(text.trim()===""){
+        alert("Enter some text!");
+        return;
+    }
+
+    fetch("/predict",{
+        method:"POST",
+        headers:{
+            "Content-Type":"application/json"
+        },
+        body:JSON.stringify({text:text})
+    })
+    .then(res=>res.json())
+    .then(data=>{
+        document.getElementById("result").innerHTML =
+        "Label: <b>"+data.label+"</b><br>Confidence: "+data.confidence.toFixed(2)+"%";
+    })
+    .catch(err=>{
+        document.getElementById("result").innerHTML="Backend not running!";
+    });
+}
+</script>
+
+</body>
+</html>

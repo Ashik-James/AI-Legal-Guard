@@ -1,0 +1,17 @@
+# API Keys
+.env
+
+# Training junk & large checkpoints (Saves GBs of space)
+training/results/
+training/checkpoint-*/
+__pycache__/
+*.pyc
+*.safetensors
+*.bin
+# Virtual Environment
+venv/
+.venv
+
+# OS Junk
+.DS_Store
+Thumbs.db
