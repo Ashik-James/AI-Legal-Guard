@@ -4,14 +4,15 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
     const verdictBox = document.getElementById('verdictBox');
     const verdictText = document.getElementById('verdictText');
 
-    verdictBox.style.display = "none";
-    statusDiv.innerText = "Searching for legal documents...";
+    if(verdictBox) verdictBox.style.display = "none";
+    statusDiv.innerText = "Searching for legal link...";
     statusDiv.style.color = "black";
     resultsList.innerHTML = "";
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     try {
+        // 1. AUTO-FIND LEGAL LINK
         const injectionResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             function: findLegalLink,
@@ -19,27 +20,36 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
 
         const result = injectionResults[0].result;
         
+        // 2. REDIRECT IF ON HOME PAGE
         if (result && result.url && result.url !== tab.url) {
             statusDiv.innerText = `Found ${result.type}. Redirecting...`;
             chrome.tabs.update(tab.id, { url: result.url });
             return;
         }
 
-        statusDiv.innerText = "Extracting unique text content...";
+        // 3. THE "CLONE & CLEAN" SCRAPER (Reads everything, breaks nothing)
+        statusDiv.innerText = "Extracting text content...";
         const scrapeResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             function: () => {
-                const junk = document.querySelectorAll('script, style, nav, header, footer, noscript, iframe');
+                // We CLONE the body so we can delete junk without breaking the real site
+                const bodyClone = document.body.cloneNode(true);
+                
+                // Remove elements that definitely aren't legal terms from the CLONE
+                const junk = bodyClone.querySelectorAll('script, style, nav, header, footer, noscript, iframe, svg, img');
                 junk.forEach(j => j.remove());
 
-                const rawText = document.body.innerText;
-                const lines = rawText.split(/\n|\. /);
+                const rawText = bodyClone.innerText;
+                const lines = rawText.split(/\n/);
                 
                 const uniqueSet = new Set();
                 lines.forEach(line => {
-                    const cleanLine = line.replace(/\s+/g, ' ').trim();
-                    if (cleanLine.length > 30 && cleanLine.length < 1000) {
-                        uniqueSet.add(cleanLine);
+                    // Clean symbols like ">" and fix spacing
+                    let clean = line.replace(/>/g, '').replace(/\s+/g, ' ').trim();
+                    
+                    // Lower threshold to 12 characters to catch things like "IP Address" or "No Refunds"
+                    if (clean.length > 12 && clean.length < 2000) {
+                        uniqueSet.add(clean);
                     }
                 });
                 return Array.from(uniqueSet).join("\n");
@@ -47,13 +57,14 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
         });
 
         const rawText = scrapeResults[0].result;
-        const clauses = rawText.split("\n").filter(s => s.length > 25);
+        const clauses = rawText.split("\n").filter(s => s.length > 10);
 
         if (clauses.length === 0) {
-            statusDiv.innerText = "No readable text found. Go to the Terms page manually.";
+            statusDiv.innerText = "No readable text found. Please highlight text manually.";
             return;
         }
 
+        // 4. RUN AI RISK SCAN
         statusDiv.innerText = `Analyzing ${clauses.length} clauses...`;
         const aiResponse = await fetch('http://127.0.0.1:5000/predict_batch', {
             method: 'POST',
@@ -62,8 +73,9 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
         });
         const riskyClauses = await aiResponse.json();
 
+        // 5. GET DETAILED VERDICT
         verdictBox.style.display = "block";
-        verdictText.innerText = "AI is evaluating the risks...";
+        verdictText.innerText = "AI is evaluating the final verdict...";
         
         const vResponse = await fetch('http://127.0.0.1:5000/final_verdict', {
             method: 'POST',
@@ -73,10 +85,11 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
         const vData = await vResponse.json();
         verdictText.innerText = vData.verdict;
 
+        // 6. DISPLAY RESULTS (Deduplicated)
         if (riskyClauses.length > 0) {
             const displayedClauses = new Set();
             riskyClauses.forEach(item => {
-                const cleanText = item.clause.replace(/\s+/g, ' ').trim();
+                const cleanText = item.clause.trim();
                 if (!displayedClauses.has(cleanText)) {
                     displayedClauses.add(cleanText);
                     const li = document.createElement('li');
@@ -99,7 +112,7 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
             });
             statusDiv.innerText = `Found ${displayedClauses.size} unique risks. Click for details.`;
         } else {
-            statusDiv.innerText = "Scan Complete: No major risks detected.";
+            statusDiv.innerText = "No major risks found. Standard terms.";
             statusDiv.style.color = "green";
         }
     } catch (e) {

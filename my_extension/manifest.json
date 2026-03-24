@@ -1,8 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "AI Legal Guard (Fully Auto)",
-  "version": "5.0",
-  "permissions": ["activeTab", "scripting"],
+  "name": "AI Legal Guard Pro",
+  "version": "7.0",
+  "permissions": ["activeTab", "scripting", "action"],
   "action": { "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "css": ["content_style.css"]
+    }
+  ],
   "host_permissions": ["http://127.0.0.1:5000/*", "<all_urls>"]
 }
