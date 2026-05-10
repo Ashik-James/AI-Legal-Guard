@@ -4,42 +4,49 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
     const verdictBox = document.getElementById('verdictBox');
     const verdictText = document.getElementById('verdictText');
 
+    // Reset UI
     if(verdictBox) verdictBox.style.display = "none";
-    statusDiv.innerText = "Searching for legal link...";
+    statusDiv.innerText = "Initializing scan...";
     statusDiv.style.color = "black";
     resultsList.innerHTML = "";
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentUrl = tab.url.toLowerCase();
+
+    // 1. Check if current page is already a legal document
+    const legalKeywords = ['terms', 'tos', 'condition', 'agreement', 'privacy', 'policy', 'legal'];
+    const alreadyOnLegalPage = legalKeywords.some(k => currentUrl.includes(k));
 
     try {
-        // 1. AUTO-FIND LEGAL LINK
+        // 2. AUTO-FIND LEGAL LINK
         const injectionResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             function: findLegalLink,
         });
 
-        const result = injectionResults[0].result;
-        
-        // 2. REDIRECT IF ON HOME PAGE
-        if (result && result.url && result.url !== tab.url) {
-            statusDiv.innerText = `Found ${result.type}. Redirecting...`;
-            chrome.tabs.update(tab.id, { url: result.url });
-            return;
+        const foundLinkResult = injectionResults[0].result;
+
+        // 3. SMART REDIRECT LOGIC
+        if (foundLinkResult && foundLinkResult.url) {
+            const normalizedFound = normalizeUrl(foundLinkResult.url);
+            const normalizedCurrent = normalizeUrl(tab.url);
+
+            // Only redirect if we are NOT on a legal page and the URL is actually different
+            if (!alreadyOnLegalPage && normalizedFound !== normalizedCurrent) {
+                statusDiv.innerText = `Found ${foundLinkResult.type}. Redirecting...`;
+                chrome.tabs.update(tab.id, { url: foundLinkResult.url });
+                return; 
+            }
         }
 
-        // 3. THE "CLONE & CLEAN" SCRAPER (Reads everything, breaks nothing)
+        // 4. DIRECT SCRAPER (Non-destructive, grabs all visible text)
         statusDiv.innerText = "Extracting text content...";
         const scrapeResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             function: () => {
-                // We CLONE the body so we can delete junk without breaking the real site
-                const bodyClone = document.body.cloneNode(true);
-                
-                // Remove elements that definitely aren't legal terms from the CLONE
-                const junk = bodyClone.querySelectorAll('script, style, nav, header, footer, noscript, iframe, svg, img');
-                junk.forEach(j => j.remove());
-
-                const rawText = bodyClone.innerText;
+                // We grab the text directly from the live body. 
+                // This is safe because we ARE NOT calling .remove() on the live site.
+                const rawText = document.body.innerText;
                 const lines = rawText.split(/\n/);
                 
                 const uniqueSet = new Set();
@@ -47,7 +54,7 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
                     // Clean symbols like ">" and fix spacing
                     let clean = line.replace(/>/g, '').replace(/\s+/g, ' ').trim();
                     
-                    // Lower threshold to 12 characters to catch things like "IP Address" or "No Refunds"
+                    // Lower threshold to catch short legal lines
                     if (clean.length > 12 && clean.length < 2000) {
                         uniqueSet.add(clean);
                     }
@@ -56,15 +63,15 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
             },
         });
 
-        const rawText = scrapeResults[0].result;
-        const clauses = rawText.split("\n").filter(s => s.length > 10);
+        const rawTextFromScraper = scrapeResults[0].result;
+        const clauses = rawTextFromScraper.split("\n").filter(s => s.trim().length > 10);
 
         if (clauses.length === 0) {
-            statusDiv.innerText = "No readable text found. Please highlight text manually.";
+            statusDiv.innerText = "No readable text found. If this is a homepage, the Auto-Finder may have failed.";
             return;
         }
 
-        // 4. RUN AI RISK SCAN
+        // 5. RUN AI RISK SCAN
         statusDiv.innerText = `Analyzing ${clauses.length} clauses...`;
         const aiResponse = await fetch('http://127.0.0.1:5000/predict_batch', {
             method: 'POST',
@@ -73,7 +80,7 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
         });
         const riskyClauses = await aiResponse.json();
 
-        // 5. GET DETAILED VERDICT
+        // 6. SHOW VERDICT (ALWAYS)
         verdictBox.style.display = "block";
         verdictText.innerText = "AI is evaluating the final verdict...";
         
@@ -85,7 +92,7 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
         const vData = await vResponse.json();
         verdictText.innerText = vData.verdict;
 
-        // 6. DISPLAY RESULTS (Deduplicated)
+        // 7. DISPLAY RESULTS
         if (riskyClauses.length > 0) {
             const displayedClauses = new Set();
             riskyClauses.forEach(item => {
@@ -98,7 +105,8 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
                     
                     li.onclick = async () => {
                         if (li.innerHTML.includes("💡")) return;
-                        li.innerHTML += `<div class='explanation-box'>⌛ Thinking...</div>`;
+                        const original = li.innerHTML;
+                        li.innerHTML = `${original}<div class='explanation-box'>⌛ Thinking...</div>`;
                         const expRes = await fetch('http://127.0.0.1:5000/explain', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -110,15 +118,25 @@ document.getElementById('analyzePageBtn').addEventListener('click', async () => 
                     resultsList.appendChild(li);
                 }
             });
-            statusDiv.innerText = `Found ${displayedClauses.size} unique risks. Click for details.`;
+            statusDiv.innerText = `Scan Complete: Found ${displayedClauses.size} unique risks.`;
         } else {
-            statusDiv.innerText = "No major risks found. Standard terms.";
+            statusDiv.innerText = "Scan Complete: This document looks safe!";
             statusDiv.style.color = "green";
         }
     } catch (e) {
         statusDiv.innerText = "Error: Check if app.py is running.";
+        console.error(e);
     }
 });
+
+function normalizeUrl(url) {
+    try {
+        let u = new URL(url);
+        return (u.host + u.pathname).toLowerCase().replace(/\/$/, "");
+    } catch (e) {
+        return url.toLowerCase().replace(/\/$/, "");
+    }
+}
 
 function findLegalLink() {
     const keywords = ['terms', 'tos', 'condition', 'agreement', 'privacy', 'policy', 'legal'];
